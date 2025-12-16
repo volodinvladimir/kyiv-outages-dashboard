@@ -55,22 +55,35 @@
   }
 
   function buildSlots(intervals) {
-    // 48 слотів по 30 хв
-    const slots = new Array(48).fill("unknown");
-    if (!Array.isArray(intervals)) return slots;
-
-    for (const it of intervals) {
-      const start = Number(it?.start);
-      const end = Number(it?.end);
-      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
-
-      const cls = typeToClass(it?.type);
-      const a = Math.max(0, Math.min(48, Math.round(start * 2)));
-      const b = Math.max(0, Math.min(48, Math.round(end * 2)));
-      for (let i = a; i < b; i++) slots[i] = cls;
-    }
-    return slots;
+  // Якщо інтервали не покривають весь день (у тижневому schedule так буває),
+  // то "порожні" проміжки не хочеться показувати сірими.
+  // Якщо в даних є POSSIBLE — вважаємо базово "світло є", а POSSIBLE/OUTAGE намалюємо поверх.
+  let base = "unknown";
+  if (Array.isArray(intervals) && intervals.length > 0) {
+    const hasPossible = intervals.some((it) =>
+      String(it?.type || "").toUpperCase().includes("POSSIBLE")
+    );
+    if (hasPossible) base = "on";
   }
+
+  const slots = new Array(48).fill(base); // 48 слотів по 30 хв
+
+  if (!Array.isArray(intervals)) return slots;
+
+  for (const it of intervals) {
+    const start = Number(it?.start);
+    const end = Number(it?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+
+    const cls = typeToClass(it?.type);
+    const a = Math.max(0, Math.min(48, Math.round(start * 2)));
+    const b = Math.max(0, Math.min(48, Math.round(end * 2)));
+    for (let i = a; i < b; i++) slots[i] = cls;
+  }
+
+  return slots;
+}
+
 
   function makeTimeline(slots) {
     const tl = document.createElement("div");
@@ -202,11 +215,31 @@
     return parseWrapper(cached);
   }
 
-  function extractDailySchedule(payload) {
-    const comp = findComponent(payload, "electricity-outages-daily-schedule");
-    const daily = comp?.dailySchedule?.[CITY] || null;
-    return { comp, daily };
+function extractSchedules(payload) {
+  const comp = findComponent(payload, "electricity-outages-daily-schedule");
+  const daily = comp?.dailySchedule?.[CITY] || null;   // фактичний (сьогодні/завтра)
+  const weekly = comp?.schedule?.[CITY] || null;       // тижневий (імовірний) по групах
+  return { comp, daily, weekly };
+}
+
+function dayIndexMon0(date) {
+  // JS: 0=Нд..6=Сб -> 0=Пн..6=Нд
+  return (date.getDay() + 6) % 7;
+}
+
+function weeklyToDayGroups(weekly, date) {
+  if (!weekly || typeof weekly !== "object") return null;
+  const idx = dayIndexMon0(date);
+
+  const out = {};
+  for (const [rawKey, weekArr] of Object.entries(weekly)) {
+    if (!Array.isArray(weekArr)) continue;
+    const key = String(rawKey).replace(/^group_/, ""); // group_1.1 -> 1.1
+    out[key] = Array.isArray(weekArr[idx]) ? weekArr[idx] : [];
   }
+  return out;
+}
+
 
   async function refresh() {
     els.refreshBtn.disabled = true;
@@ -218,7 +251,7 @@
       const noticeText = findNoticeText(payload);
       setNotice(noticeText);
 
-      const { comp, daily } = extractDailySchedule(payload);
+      const { comp, daily, weekly } = extractSchedules(payload);
 
       const apiUpdatedAt = Number.isFinite(comp?.lastRegistryUpdateTime)
         ? new Date(comp.lastRegistryUpdateTime * 1000)
@@ -233,11 +266,32 @@
       });
 
       if (!daily?.today?.groups) {
-        els.todayTitle.textContent = "Сьогодні";
-        els.todayTable.innerHTML = "<div class='notice'>Наразі немає опублікованого добового графіка (або обмеження не застосовуються).</div>";
-        els.tomorrowCard.hidden = true;
-        return;
-      }
+  // якщо добового нема — показуємо тижневий "імовірний"
+  const now = new Date();
+  const todayGroups = weeklyToDayGroups(weekly, now);
+
+  if (todayGroups) {
+    els.todayTitle.textContent = "Сьогодні";
+    renderDay(els.todayTable, todayGroups);
+
+    const tomorrow = new Date(now);
+    tomorrow.setDate(now.getDate() + 1);
+    const tomorrowGroups = weeklyToDayGroups(weekly, tomorrow);
+
+    els.tomorrowCard.hidden = false;
+    els.tomorrowTitle.textContent = "Завтра";
+    renderDay(els.tomorrowTable, tomorrowGroups);
+    return;
+  }
+
+  // реально немає даних
+  els.todayTitle.textContent = "Сьогодні";
+  els.todayTable.innerHTML =
+    "<div class='notice'>Наразі немає опублікованого добового графіка (або обмеження не застосовуються).</div>";
+  els.tomorrowCard.hidden = true;
+  return;
+}
+
 
       els.todayTitle.textContent = daily.today.title || "Сьогодні";
       renderDay(els.todayTable, daily.today.groups);
