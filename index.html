@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Графіки відключень (Київ) — YASNO</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="wrap">
+    <div class="top">
+      <h1>Графіки відключень · Київ</h1>
+      <div class="controls">
+        <button id="refreshBtn" class="btn">Оновити зараз</button>
+        <label class="toggle">
+          <input type="checkbox" id="preferLive" checked />
+          <span>Live з YASNO API</span>
+        </label>
+      </div>
+    </div>
+    <div class="meta" id="meta">Завантаження…</div>
+    <div class="legend">
+      <span class="pill on">Світло є</span>
+      <span class="pill off">Світла немає</span>
+      <span class="pill maybe">Може бути</span>
+      <span class="pill unknown">Н/д</span>
+      <span class="hint">Крок: 30 хв · шкала 00:00–24:00</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="notice" class="notice" hidden></div>
+
+    <div class="cards">
+      <section class="card">
+        <h2 id="todayTitle">Сьогодні</h2>
+        <div id="todayTable" class="table"></div>
+      </section>
+
+      <section class="card" id="tomorrowCard" hidden>
+        <h2 id="tomorrowTitle">Завтра</h2>
+        <div id="tomorrowTable" class="table"></div>
+      </section>
+    </div>
+
+    <footer class="footer">
+      <div>Джерело: <span id="sourceBadge" class="badge">…</span></div>
+      <div>Автооновлення: раз на годину (поки сторінка відкрита).</div>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
