@@ -2,53 +2,191 @@
 <html lang="uk">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Графіки відключень (Київ) — YASNO</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Київ — графіки відключень (усі групи)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+    h1 { margin: 0 0 6px; font-size: 20px; }
+    #meta { color: #666; font-size: 13px; margin-bottom: 14px; }
+    .legend { display:flex; gap:12px; align-items:center; margin:10px 0 18px; font-size:13px; color:#444;}
+    .dot { width:10px; height:10px; border-radius:2px; display:inline-block; margin-right:6px; vertical-align:middle; }
+    .on { background: #2ea043; }
+    .off { background: #d1242f; }
+    .unknown { background: #8b949e; }
+
+    .groupBlock { border: 1px solid #e5e5e5; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+    .groupTitle { font-weight: 700; margin-bottom: 8px; }
+    .dayTitle { font-size: 13px; color:#666; margin: 10px 0 6px; }
+    .timeline { display: grid; grid-template-columns: repeat(48, 1fr); gap: 1px; background:#ddd; border-radius: 6px; overflow:hidden; }
+    .cell { height: 14px; background:#8b949e; }
+    .cell.on { background:#2ea043; }
+    .cell.off { background:#d1242f; }
+    .cell.unknown { background:#8b949e; }
+    .hours { display:grid; grid-template-columns: repeat(24, 1fr); font-size: 11px; color:#666; margin-top:6px; }
+    .hours span { text-align:left; }
+    .note { font-size: 12px; color:#b54708; margin-top: 6px; }
+  </style>
 </head>
 <body>
-  <header class="wrap">
-    <div class="top">
-      <h1>Графіки відключень · Київ</h1>
-      <div class="controls">
-        <button id="refreshBtn" class="btn">Оновити зараз</button>
-        <label class="toggle">
-          <input type="checkbox" id="preferLive" checked />
-          <span>Live з YASNO API</span>
-        </label>
-      </div>
-    </div>
-    <div class="meta" id="meta">Завантаження…</div>
-    <div class="legend">
-      <span class="pill on">Світло є</span>
-      <span class="pill off">Світла немає</span>
-      <span class="pill maybe">Може бути</span>
-      <span class="pill unknown">Н/д</span>
-      <span class="hint">Крок: 30 хв · шкала 00:00–24:00</span>
-    </div>
-  </header>
+  <h1>Київ — графіки відключень (усі групи)</h1>
+  <div id="meta">Завантаження…</div>
 
-  <main class="wrap">
-    <div id="notice" class="notice" hidden></div>
+  <div class="legend">
+    <span><span class="dot on"></span>є світло</span>
+    <span><span class="dot off"></span>нема світла</span>
+    <span><span class="dot unknown"></span>невідомо/нема даних</span>
+  </div>
 
-    <div class="cards">
-      <section class="card">
-        <h2 id="todayTitle">Сьогодні</h2>
-        <div id="todayTable" class="table"></div>
-      </section>
+  <div id="content"></div>
 
-      <section class="card" id="tomorrowCard" hidden>
-        <h2 id="tomorrowTitle">Завтра</h2>
-        <div id="tomorrowTable" class="table"></div>
-      </section>
-    </div>
+<script>
+  const REGION_CPU = "kyiv";
+  const DTEK_URL = "https://dtek-api.svitlo-proxy.workers.dev/";
+  const REFRESH_MS = 60 * 60 * 1000;
 
-    <footer class="footer">
-      <div>Джерело: <span id="sourceBadge" class="badge">…</span></div>
-      <div>Автооновлення: раз на годину (поки сторінка відкрита).</div>
-    </footer>
-  </main>
+  function pad2(n){ return String(n).padStart(2,"0"); }
 
-  <script src="app.js"></script>
+  function detectMode(slotsMap){
+    const vals = Object.values(slotsMap).map(v => Number(v)).filter(v => Number.isFinite(v));
+    const u = new Set(vals);
+    // Якщо є "2" — дуже схоже на модель 0/1/2 (як у svitlo_live)
+    return u.has(2) ? "012" : "01";
+  }
+
+  function toState(code, mode){
+    code = Number(code);
+    if (mode === "012") {
+      // svitlo_live: 1=on, 2=off, інакше unknown :contentReference[oaicite:3]{index=3}
+      if (code === 1) return "on";
+      if (code === 2) return "off";
+      return "unknown";
+    } else {
+      // Фолбек: 0=on, 1=off (поширений формат)
+      if (code === 0) return "on";
+      if (code === 1) return "off";
+      return "unknown";
+    }
+  }
+
+  function buildHalfList(slotsMap){
+    const mode = detectMode(slotsMap);
+    const res = [];
+    for (let h=0; h<24; h++){
+      for (const m of [0,30]){
+        const label = `${pad2(h)}:${pad2(m)}`;
+        const code = (label in slotsMap) ? slotsMap[label] : 0;
+        res.push(toState(code, mode));
+      }
+    }
+    return res;
+  }
+
+  function hasPublishedSchedule(slotsMap){
+    // як у svitlo_live: якщо є хоч один 1 або 2 — вважаємо, що графік опублікований :contentReference[oaicite:4]{index=4}
+    return Object.values(slotsMap).some(v => [1,2].includes(Number(v)));
+  }
+
+  function timelineEl(half){
+    const tl = document.createElement("div");
+    tl.className = "timeline";
+    for (const s of half){
+      const c = document.createElement("div");
+      c.className = "cell " + s;
+      tl.appendChild(c);
+    }
+    return tl;
+  }
+
+  function hoursEl(){
+    const h = document.createElement("div");
+    h.className = "hours";
+    for (let i=0; i<24; i++){
+      const s = document.createElement("span");
+      // мітки кожні 2 години
+      s.textContent = (i % 2 === 0) ? pad2(i) : "";
+      h.appendChild(s);
+    }
+    return h;
+  }
+
+  function renderGroup(block, queue, dateIso, slotsMap){
+    const dayTitle = document.createElement("div");
+    dayTitle.className = "dayTitle";
+    dayTitle.textContent = dateIso;
+
+    block.appendChild(dayTitle);
+
+    if (!slotsMap || Object.keys(slotsMap).length === 0 || !hasPublishedSchedule(slotsMap)) {
+      block.appendChild(timelineEl(Array(48).fill("unknown")));
+      block.appendChild(hoursEl());
+      const note = document.createElement("div");
+      note.className = "note";
+      note.textContent = "Немає опублікованого графіка (або дані відсутні).";
+      block.appendChild(note);
+      return;
+    }
+
+    const half = buildHalfList(slotsMap);
+    block.appendChild(timelineEl(half));
+    block.appendChild(hoursEl());
+  }
+
+  async function fetchApi(){
+    const resp = await fetch(DTEK_URL, { cache: "no-store" });
+    const raw = await resp.json();
+
+    // svitlo_live для DTEK/Yasno режиму очікує { body: "stringified_json", ... } :contentReference[oaicite:5]{index=5}
+    if (raw && typeof raw.body === "string") {
+      return JSON.parse(raw.body);
+    }
+    return raw;
+  }
+
+  async function refresh(){
+    const meta = document.getElementById("meta");
+    const content = document.getElementById("content");
+    content.innerHTML = "";
+
+    try {
+      const api = await fetchApi();
+
+      const dateToday = api.date_today;
+      const dateTomorrow = api.date_tomorrow;
+
+      const region = (api.regions || []).find(r => r.cpu === REGION_CPU);
+      if (!region) throw new Error("Не знайшов region=kyiv у відповіді API");
+
+      const scheduleByQueue = region.schedule || {};
+      const queues = Object.keys(scheduleByQueue).sort((a,b)=>Number(a)-Number(b));
+
+      meta.textContent = `Джерело: svitlo_live proxy (DTEK/Yasno) • Оновлено: ${new Date().toLocaleString("uk-UA")}`;
+
+      for (const q of queues) {
+        const block = document.createElement("div");
+        block.className = "groupBlock";
+
+        const title = document.createElement("div");
+        title.className = "groupTitle";
+        title.textContent = `Група ${q}`;
+        block.appendChild(title);
+
+        const todayMap = (scheduleByQueue[q] && dateToday) ? (scheduleByQueue[q][dateToday] || {}) : {};
+        renderGroup(block, q, dateToday || "Сьогодні", todayMap);
+
+        const tomorrowMap = (scheduleByQueue[q] && dateTomorrow) ? (scheduleByQueue[q][dateTomorrow] || {}) : null;
+        if (dateTomorrow && tomorrowMap && Object.keys(tomorrowMap).length) {
+          renderGroup(block, q, dateTomorrow, tomorrowMap);
+        }
+
+        content.appendChild(block);
+      }
+    } catch (e) {
+      meta.textContent = `Помилка: ${e && e.message ? e.message : String(e)}`;
+    }
+  }
+
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+</script>
 </body>
 </html>
